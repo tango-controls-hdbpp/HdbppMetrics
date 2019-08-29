@@ -1,0 +1,214 @@
+diff -Nur hdbpp-es-org/src/HdbDevice.cpp hdbpp-es/src/HdbDevice.cpp
+--- hdbpp-es-org/src/HdbDevice.cpp	2019-08-28 16:16:54.558752000 +0200
++++ hdbpp-es/src/HdbDevice.cpp	2019-08-29 13:23:49.630683000 +0200
+@@ -691,8 +691,9 @@
+ //=============================================================================
+ //=============================================================================
+ 
+-ArchiveCB::ArchiveCB(HdbDevice	*dev):Tango::LogAdapter(dev->_device)
++ArchiveCB::ArchiveCB(HdbDevice	*dev) : Tango::LogAdapter(dev->_device), _event_recorder("received.log")
+ {
++    _event_recorder.init();
+ 	hdb_dev=dev;
+ }
+ 
+@@ -703,6 +704,11 @@
+ //=============================================================================
+ void ArchiveCB::push_event(Tango::EventData *data)
+ {
++    // PROFILE POINT ****
++
++    // get the event time, since we need to do some lookups before
++    // we can record and event for this
++    auto event_time_ms = hdbpp_metrics::MetricsUtils::nowInNanoSec();
+ 
+ 	//time_t	t = time(NULL);
+ 	//DEBUG_STREAM << __func__<<": Event '"<<data->attr_name<<"' id="<<omni_thread::self()->id() << "  Received at " << ctime(&t);
+@@ -882,6 +888,23 @@
+ 
+ 	Tango::EventData	*ev_data = new Tango::EventData(data->device,data->attr_name, data->event, dev_attr_copy, data->errors);
+ 
++    // we can now assume the event is valid, and all the data we need to record
++    // an entry is available
++    _event_recorder.recordEvent(
++        data->err ? "ERROR_DATA_EVENT" : "DATA_EVENT", // event type
++        hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++            ev_data->attr_value->get_date().tv_sec, 
++            ev_data->attr_value->get_date().tv_usec), // event id
++        event_time_ms, // profile time point ms
++        hdbpp_metrics::MetricsUtils::timevalToMiliSec(
++            ev_data->attr_value->get_date().tv_sec, 
++            ev_data->attr_value->get_date().tv_usec), // original event time ms
++        ev_data->attr_name,
++        ev_data->attr_value->get_quality(),
++		signal->data_type,
++		signal->data_format,
++		signal->write_type);
++
+ 	HdbCmdData *cmd = new HdbCmdData((Tango::EventData *)ev_data, ev_data_type);
+ 	hdb_dev->push_shared->push_back_cmd(cmd);
+ }
+@@ -892,6 +915,10 @@
+ //=============================================================================
+ void ArchiveCB::push_event(Tango::AttrConfEventData *data)
+ {
++    // get the event time, since we need to do some lookups before
++    // we can record and event for this
++    auto event_time_ms = hdbpp_metrics::MetricsUtils::nowInNanoSec();
++
+ 	//DEBUG_STREAM << __func__<<": AttrConfEvent '"<<data->attr_name<<"' id="<<omni_thread::self()->id() << "  Received at " << ctime(&t);
+ 	hdb_dev->fix_tango_host(data->attr_name);	//TODO: why sometimes event arrive without fqdn ??
+ 
+@@ -943,6 +970,22 @@
+ 	Tango::AttrConfEventData	*ev_data = new Tango::AttrConfEventData(data->device,data->attr_name, data->event, attr_conf, data->errors);
+ 	HdbCmdData *cmd = new HdbCmdData((Tango::AttrConfEventData *)ev_data, ev_data_type);
+ 
++    // we can now assume the event is valid, and all the data we need to record
++    // an entry is available
++    _event_recorder.recordEvent(
++        "PARAM_EVENT", // event type
++        hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++            ev_data->get_date().tv_sec, 
++            ev_data->get_date().tv_usec), // event id
++        event_time_ms, // profile time point ms
++        hdbpp_metrics::MetricsUtils::timevalToMiliSec(
++            ev_data->get_date().tv_sec, 
++            ev_data->get_date().tv_usec), // original event time ms
++        ev_data->attr_name,
++        ev_data_type.data_type,
++        ev_data_type.data_format,
++        ev_data_type.write_type);
++
+ 	hdb_dev->push_shared->push_back_cmd(cmd);
+ }
+ //=============================================================================
+diff -Nur hdbpp-es-org/src/HdbDevice.h hdbpp-es/src/HdbDevice.h
+--- hdbpp-es-org/src/HdbDevice.h	2019-08-28 16:16:54.478757000 +0200
++++ hdbpp-es/src/HdbDevice.h	2019-08-28 16:16:55.537757000 +0200
+@@ -52,6 +52,10 @@
+ #include <StatsThread.h>
+ #include <PollerThread.h>
+ #include <CheckPeriodicThread.h>
++
++// ArchiveCB is instrumented for profiling
++#include "Metrics.hpp"
++
+ /**
+  * @author	$Author: graziano $
+  * @version	$Revision: 1.5 $
+@@ -381,6 +385,9 @@
+ //==========================================================
+ class ArchiveCB : public Tango::CallBack, public Tango::LogAdapter
+ {
++private:
++    hdbpp_metrics::EventRecorder _event_recorder;
++    
+ public:
+ 	HdbDevice	*hdb_dev;
+ //	HdbSignal	*signal;
+diff -Nur hdbpp-es-org/src/PushThread.cpp hdbpp-es/src/PushThread.cpp
+--- hdbpp-es-org/src/PushThread.cpp	2019-08-28 16:16:54.560787000 +0200
++++ hdbpp-es/src/PushThread.cpp	2019-08-29 13:23:24.923705000 +0200
+@@ -1045,8 +1045,9 @@
+ 
+ //=============================================================================
+ //=============================================================================
+-PushThread::PushThread(PushThreadShared	*pts, HdbDevice *dev) : Tango::LogAdapter(dev->_device)
++PushThread::PushThread(PushThreadShared	*pts, HdbDevice *dev) : Tango::LogAdapter(dev->_device), _event_recorder("db_insertion.log")
+ {
++    _event_recorder.init();
+ 	shared=pts;
+ };
+ 
+@@ -1072,8 +1073,22 @@
+ 					double	dstart = now.tv_sec + (double)now.tv_usec/1.0e6;
+ 					try
+ 					{
++                        _event_recorder.recordEvent(
++                            "BEFORE_STORE_DATA_EVENT", // event type
++                            hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++                                cmd->ev_data->attr_value->get_date().tv_sec, 
++                                cmd->ev_data->attr_value->get_date().tv_usec), // event id
++                            hdbpp_metrics::MetricsUtils::nowInNanoSec());
++
+ 						shared->mdb->insert_Attr(cmd->ev_data, cmd->ev_data_type);
+ 
++                        _event_recorder.recordEvent(
++                            "AFTER_STORE_DATA_EVENT", // event type
++                            hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++                                cmd->ev_data->attr_value->get_date().tv_sec, 
++                                cmd->ev_data->attr_value->get_date().tv_usec), // event id
++                            hdbpp_metrics::MetricsUtils::nowInNanoSec());
++                        
+ 						gettimeofday(&now, NULL);
+ 						double  dnow = now.tv_sec + (double)now.tv_usec/1.0e6;
+ 						double  rcv_time = cmd->ev_data->get_date().tv_sec + (double)cmd->ev_data->get_date().tv_usec/1.0e6;
+@@ -1081,6 +1096,13 @@
+ 					}
+ 					catch(Tango::DevFailed  &e)
+ 					{
++                        _event_recorder.recordEvent(
++                            "AFTER_STORE_DATA_EVENT_EXCEPTION", // event type
++                            hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++                                cmd->ev_data->attr_value->get_date().tv_sec, 
++                                cmd->ev_data->attr_value->get_date().tv_usec), // event id
++                            hdbpp_metrics::MetricsUtils::nowInNanoSec());
++
+ 						shared->set_nok_db(cmd->ev_data->attr_name, string(e.errors[0].desc));
+ 						Tango::Except::print_exception(e);
+ 					}
+@@ -1090,11 +1112,32 @@
+ 				{
+ 					try
+ 					{
++                        _event_recorder.recordEvent(
++                            "BEFORE_STORE_PARAM_EVENT",
++                            hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++                                cmd->ev_data_param->get_date().tv_sec, 
++                                cmd->ev_data_param->get_date().tv_usec), // event id
++                            hdbpp_metrics::MetricsUtils::nowInNanoSec());
++
+ 						//	Send it to DB
+ 						shared->mdb->insert_param_Attr(cmd->ev_data_param, cmd->ev_data_type);
++
++                        _event_recorder.recordEvent(
++                            "AFTER_STORE_PARAM_EVENT",
++                            hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++                                cmd->ev_data_param->get_date().tv_sec, 
++                                cmd->ev_data_param->get_date().tv_usec), // event id
++                            hdbpp_metrics::MetricsUtils::nowInNanoSec());
+ 					}
+ 					catch(Tango::DevFailed  &e)
+ 					{
++                        _event_recorder.recordEvent(
++                            "AFTER_STORE_PARAM_EVENT_EXCEPTION",
++                            hdbpp_metrics::MetricsUtils::timevalToMicroSec(
++                                cmd->ev_data_param->get_date().tv_sec, 
++                                cmd->ev_data_param->get_date().tv_usec), // event id
++                            hdbpp_metrics::MetricsUtils::nowInNanoSec());
++
+ 						ERROR_STREAM << "PushThread::run_undetached: An error was detected when inserting attribute parameter for: "
+ 									 << cmd->ev_data_param->attr_name << endl;
+ 
+diff -Nur hdbpp-es-org/src/PushThread.h hdbpp-es/src/PushThread.h
+--- hdbpp-es-org/src/PushThread.h	2019-08-28 16:16:54.540755000 +0200
++++ hdbpp-es/src/PushThread.h	2019-08-28 16:16:55.535743000 +0200
+@@ -52,6 +52,8 @@
+ #include "hdb++/HdbClient.h"
+ #include "HdbCmdData.h"
+ 
++// PushThread is instrumented for profiling
++#include "Metrics.hpp"
+ 
+ namespace HdbEventSubscriber_ns
+ {
+@@ -223,7 +225,8 @@
+ class PushThread: public omni_thread, public Tango::LogAdapter
+ {
+ 	PushThreadShared	*shared;
+-
++    hdbpp_metrics::EventRecorder _event_recorder;
++    
+ public:
+ /**
+  *	Initialize the sub process parameters (name, domain, log_file).

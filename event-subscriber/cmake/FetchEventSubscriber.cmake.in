@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 2.8.2)
+
+project(hdbpp_es-download NONE)
+include(ExternalProject)
+
+ExternalProject_Add(hdbpp_es
+    GIT_REPOSITORY "https://github.com/tango-controls-hdbpp/hdbpp-es.git"
+    GIT_TAG "integrated-build"
+    SOURCE_DIR "${CMAKE_BINARY_DIR}/hdbpp_es-src"
+    BINARY_DIR "${CMAKE_BINARY_DIR}/hdbpp_es-build"
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND ""
+    INSTALL_COMMAND ""
+    TEST_COMMAND ""
+    PATCH_COMMAND patch -p1 -i ${CMAKE_SOURCE_DIR}/patch/metrics.patch)
