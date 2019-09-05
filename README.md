@@ -2,7 +2,7 @@
 
 WIP
 
-Hdbpp metrics work. Currently depends on  the unmerged cmake branches in the hdbpp-es/libhdbpp projects.
+Hdbpp metrics work. Currently depends on  the unmerged CMake branches in the hdbpp-es/libhdbpp projects.
 
 ## Metrics Library
 
