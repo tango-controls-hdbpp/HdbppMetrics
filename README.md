@@ -35,3 +35,7 @@ export PKG_CONFIG_PATH=/non/standard/tango/install/location
 cmake ../
 ...
 ```
+
+## Documentation
+
+See the doc directory for some documentation on the goals and descriptions of the data generated.
