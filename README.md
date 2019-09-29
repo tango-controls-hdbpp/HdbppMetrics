@@ -21,7 +21,7 @@ The event subscriber project downloads and links again libhdbpp (experimental ve
 To build the hdbpp-es project, do the following:
 
 ```bash
-cd event-subscirber
+cd event-subscriber
 mkdir build
 cd build
 cmake ..
